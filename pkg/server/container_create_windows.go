@@ -160,7 +160,7 @@ func (c *criService) CreateContainer(ctx context.Context, r *runtime.CreateConta
 		sandboxPlatform = "windows/amd64"
 	}
 
-	spec, err := c.generateContainerSpec(id, sandboxID, sandboxPid, sandbox.NetNSPath, config, sandboxConfig, sandboxPlatform, &image.ImageSpec.Config)
+	spec, err := c.generateContainerSpec(id, sandboxID, sandboxPid, sandbox.NetNSPath, config, sandboxConfig, sandboxPlatform, &image.ImageSpec)
 	if err != nil {
 		return nil, errors.Wrapf(err, "failed to generate container %q spec", id)
 	}
@@ -252,8 +252,23 @@ func (c *criService) CreateContainer(ctx context.Context, r *runtime.CreateConta
 	return &runtime.CreateContainerResponse{ContainerId: id}, nil
 }
 
+// removeMount removes the mount with given destination inside the spec.
+func removeMount(s *runtimespec.Spec, dest string) {
+	var (
+		mounts  []runtimespec.Mount
+		current = s.Mounts
+	)
+	for _, m := range current {
+		if m.Destination == dest {
+			continue
+		}
+		mounts = append(mounts, m)
+	}
+	s.Mounts = mounts
+}
+
 func (c *criService) generateContainerSpec(id string, sandboxID string, sandboxPid uint32, netnsPath string, config *runtime.ContainerConfig,
-	sandboxConfig *runtime.PodSandboxConfig, sandboxPlatform string, imageConfig *imagespec.ImageConfig) (*runtimespec.Spec, error) {
+	sandboxConfig *runtime.PodSandboxConfig, sandboxPlatform string, image *imagespec.Image) (*runtimespec.Spec, error) {
 	// Creates a spec Generator with the default spec.
 	ctx := ctrdutil.NamespacedContext()
 	spec, err := oci.GenerateSpecWithPlatform(ctx, nil, sandboxPlatform, &containers.Container{ID: id})
@@ -264,17 +279,19 @@ func (c *criService) generateContainerSpec(id string, sandboxID string, sandboxP
 	if plat.OS == "linux" {
 		// Remove default rlimits (See issue #515)
 		spec.Process.Rlimits = nil
+		// Remove default /run mount. This matches upstream behavior.
+		removeMount(spec, "/run")
 	}
 	g := newSpecGenerator(spec)
 
-	if err := setOCIProcessArgs(&g, config, imageConfig); err != nil {
+	if err := setOCIProcessArgs(&g, config, image); err != nil {
 		return nil, err
 	}
 
 	if config.GetWorkingDir() != "" {
 		g.SetProcessCwd(config.GetWorkingDir())
-	} else if imageConfig.WorkingDir != "" {
-		g.SetProcessCwd(imageConfig.WorkingDir)
+	} else if image.Config.WorkingDir != "" {
+		g.SetProcessCwd(image.Config.WorkingDir)
 	}
 
 	g.SetProcessTerminal(config.GetTty())
@@ -287,7 +304,7 @@ func (c *criService) generateContainerSpec(id string, sandboxID string, sandboxP
 
 	// Apply envs from image config first, so that envs from container config
 	// can override them.
-	if err := addImageEnvs(&g, imageConfig.Env); err != nil {
+	if err := addImageEnvs(&g, image.Config.Env); err != nil {
 		return nil, err
 	}
 	for _, e := range config.GetEnvs() {
@@ -486,7 +503,7 @@ func (c *criService) generateContainerSpec(id string, sandboxID string, sandboxP
 		if userstr == "" {
 			// Lastly, since no user override was passed via CRI try to set via
 			// OCI Image
-			userstr = imageConfig.User
+			userstr = image.Config.User
 		}
 		if userstr != "" {
 			g.AddAnnotation("io.microsoft.lcow.userstr", userstr)
@@ -524,7 +541,7 @@ func (c *criService) generateContainerSpec(id string, sandboxID string, sandboxP
 			g.SetWindowsResourcesMemoryLimit(uint64(resources.GetMemoryLimitInBytes()))
 		}
 
-		username := imageConfig.User
+		username := image.Config.User
 		securityContext := config.GetWindows().GetSecurityContext()
 		if securityContext != nil {
 			runAsUser := securityContext.GetRunAsUsername()
