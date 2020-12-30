@@ -62,7 +62,7 @@ func (c *criService) getDefaultSnapshotterForSandbox(cfg *runtime.PodSandboxConf
 
 func (c *criService) getDefaultSnapshotterForPlatform(platform string) string {
 	if platform == "linux/amd64" {
-		return "windows-lcow"
+		return "teleportd"
 	} else if platform == "windows/amd64" {
 		return "windows"
 	}

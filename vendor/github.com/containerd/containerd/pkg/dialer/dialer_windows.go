@@ -24,7 +24,6 @@ import (
 	"time"
 
 	winio "github.com/Microsoft/go-winio"
-	"github.com/pkg/errors"
 )
 
 func isNoent(err error) bool {
@@ -43,7 +42,7 @@ func dialer(address string, timeout time.Duration) (net.Conn, error) {
 	case "tcp":
 		return net.DialTimeout("tcp", u.Host, timeout)
 	}
-	return nil, errors.Errorf("unsupported protocol '%s'", u.Scheme)
+	return net.DialTimeout("unix", address, timeout)
 }
 
 // DialAddress returns the dial address
